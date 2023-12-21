@@ -1,0 +1,93 @@
+import paxos as px
+import sys
+import time
+from random import randint, sample
+
+NOPS = 8
+class ReplicaForTesting(process,px.Replica):
+    def receive(msg = ('GetState',serial), from_=client):
+        output('Getting state')
+        send(('State',state, serial),to=client)
+
+class Checker(process):
+  def setup(replicas, nrequests, all_leaders, acceptors):
+    self.cmd_id = 0        # command id
+    self.results = dict()  # map of command id to result of command
+
+  def awaitTimeout(time):
+        if await(False):
+            pass 
+        elif timeout(time):
+            pass
+       
+  def basicTest(numFailures,acceptors,expectedState,uniqueId):
+    acceptorsToFail = sample(acceptors, numFailures)
+    if len(acceptorsToFail)>0:
+        send(('mute','123'), to= acceptorsToFail)
+        awaitTimeout(10)
+    for i in range(nrequests):
+      op = px.Op(); op.id = randint(0, NOPS-1)
+      output('### client 1 request:', 'cmd_id', cmd_id, 'op', op)
+      send(('request', (self, cmd_id, op)), to= replicas)
+      await(cmd_id in results)
+      expectedState.append(op.id)
+      output('### client 1.1 received result:', cmd_id, results[cmd_id])
+      cmd_id = cmd_id + 1
+    
+    send(('GetState',uniqueId),to= replicas)
+    awaitTimeout(10)
+    states = setof((state,server),received(('State',state,_uniqueId),from_=server))
+    count = 0
+
+    for state,server in states:
+       if state==expectedState:
+          count+=1 
+    
+    assert count>len(acceptors)//2
+    
+
+    if len(acceptorsToFail)>0:
+        send(('un_mute','123'), to= acceptorsToFail)
+        awaitTimeout(10)
+    
+    output('---- terminating')
+
+    
+     
+  def run():
+    expectedState = []
+    basicTest(1,acceptors,expectedState,123)
+    basicTest(0,acceptors,expectedState,234)
+    
+   
+
+  def receive(msg= ('response', cmd_id, result)):
+    output('### client 2 response:', 'cmd_id', cmd_id, 'result', result)
+    if cmd_id not in results:
+      results[cmd_id] = result
+    elif results[cmd_id] != result:
+      output('==== different result', cmd_id, result, 'than', results[cmd_id])
+      raise RuntimeError('Desynced!!!!')
+
+def main():
+    nreplicas = int(sys.argv[1]) if len(sys.argv) > 1 else 2
+    nacceptors = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+    nleaders = int(sys.argv[3]) if len(sys.argv) > 3 else 2
+    nclients = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    nrequests = int(sys.argv[5]) if len(sys.argv) > 5 else 2
+
+    replicas = new(ReplicaForTesting, num= nreplicas)
+    acceptors = new(px.Acceptor, (), num= nacceptors)
+    all_leaders = new(px.Leader, (acceptors, replicas), num= nleaders*2)
+    leaders = sample(all_leaders, len(all_leaders)//2)
+    state = []; setup(replicas, (leaders, state))
+    checkers = new(Checker, (replicas, nrequests, all_leaders,acceptors), num= nclients)
+
+    start(replicas | acceptors)
+    start(all_leaders)
+    start(checkers)
+
+    time.sleep(100)
+    end(checkers)
+    end(all_leaders)
+    end(replicas | acceptors)
